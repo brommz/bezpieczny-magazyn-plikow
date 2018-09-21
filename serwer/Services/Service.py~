@@ -1,0 +1,108 @@
+import hashlib
+import os, uuid
+import time
+
+import pyrestful.rest
+from pyrestful import mediatypes
+from pyrestful.rest import get, post
+
+from MyCrypto.HMAC import HMAC, calcHMAC
+
+class Service(pyrestful.rest.RestHandler):
+    def initialize(self, database):
+        self.database = database
+
+    @get(_path = "/User/{Userid}", _types = [int],_produces = mediatypes.APPLICATION_JSON)
+    def getUser(self, Userid):
+        if not self.database.exists(Userid):
+            self.gen_http_error(404, 'Error 404 : do not exists the customer : %d' % Userid)
+            return
+        response = self.database.find(Userid)
+        #response = User(1, 'nazwa', 'klucz')
+        print(response)
+        return response
+
+
+    @post(_path = "/CreateUser", _types = [str,str], _produces = mediatypes.APPLICATION_JSON)
+    def createUser(self, Login, Key):
+        userid = self.database.insert(str(Login), str(Key))
+        return {"created_user_id": userid}
+
+    @get(_path = "/Hmac/{Key}", _types = [str], _produces = mediatypes.APPLICATION_JSON)
+    def getHmac(self, Key):
+        hmac = calcHMAC(str(Key), 'test', hashlib.md5)
+        print hmac
+        #return { 'hmac': hmac.hexdigest()}
+
+    @get(_path = "/Time/{timestamp}", _types = [float], _produces = mediatypes.APPLICATION_JSON)
+    def getHmac(self, timestamp):
+        timeNow = time.time()
+        return { 'time': [ timeNow, timeNow-timestamp] }
+
+    @post(_path = "/UploadFile", _types = [float,str,str,str,str], _produces = mediatypes.APPLICATION_JSON)
+    def uploadFile(self, TimeStamp, Command, FileName, UserId, HMAC):
+        if not self.isTimeStampOk(TimeStamp):
+            return { "error": "Timestamp problem. Possible replay attack" }
+        message = str(TimeStamp) + Command + FileName + str(UserId)
+        if not self.checkHMAC(message, UserId, HMAC):
+            return { "error": "HMAC not valid" }
+
+        fileinfo = self.request.files['filearg'][0]
+        print "fileinfo is", fileinfo
+        fname = fileinfo['filename']
+        cname = str(fname)
+        fh = open('./files/' + cname, 'w')
+        fh.write(fileinfo['body'])
+        self.finish(cname + " is uploaded!!")
+        return { "uploadedFile:": fname }
+
+    @get(_path = "/UploadFilePage", _produces=mediatypes.APPLICATION_JSON)
+    def newFile(self):
+        self.render("fileuploadform.html")
+
+    @get(_path = "/File", _types=[float,str,str,str,str], _produces=mediatypes.APPLICATION_JSON)
+    def downloadFile(self, TimeStamp, Command, FileName, UserId, HMAC):
+        if not self.isTimeStampOk(TimeStamp):
+            return { "error": "Timestamp problem. Possible replay attack" }
+        message = str(TimeStamp) + Command + FileName + str(UserId)
+        if not self.checkHMAC(message, UserId, HMAC):
+            return { "error": "HMAC not valid" }
+
+        file_name = './files/' + str(FileName)
+        buf_size = 4096
+        self.set_header('Content-Type', 'application/octet-stream')
+        self.set_header('Content-Disposition', 'attachment; filename=' + FileName)
+        with open(file_name, 'r') as f:
+            while True:
+                data = f.read(buf_size)
+                if not data:
+                    break
+                self.write(data)
+        self.finish()
+
+    @get(_path = "/FileList", _types=[float, str, str, str], _produces=mediatypes.APPLICATION_JSON)
+    def fileList(self, TimeStamp, Command, UserId, HMAC):
+        if not self.isTimeStampOk(TimeStamp):
+            return { "error": "Timestamp problem. Possible replay attack" }
+        message = str(TimeStamp) + Command + str(UserId)
+        if not self.checkHMAC(message, UserId, HMAC):
+            return { "error": "HMAC not valid" }
+
+        return { "fileList": os.listdir('./files/') }
+
+    # do 500 ms roznicy mowi ze nie bylo ataku powtorzeniowego bo nikt by nie zdazyl
+    def isTimeStampOk(self, timeStamp):
+        timeNow = time.time()
+        if timeNow - timeStamp < 0.5:
+            return True
+        return True
+
+    # sprawdza HMAC poprzez wyliczenie i porownanie
+    def checkHMAC(self, message, userId, HMAC):
+        user = self.database.find(userId)
+        hmac = calcHMAC(user.get_Key(), str(message), hashlib.md5)
+
+        if hmac.hexdigest() == HMAC:
+            return True
+        return False
+

@@ -1,0 +1,12 @@
+application: mkoi-projekt
+version: 2
+runtime: python27
+api_version: 1
+threadsafe: true
+
+handlers:
+- url: /files/
+  static_dir: files
+
+- url: .*
+  script: Main.application
